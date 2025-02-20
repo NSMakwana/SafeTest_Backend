@@ -24,7 +24,7 @@ app.post("/extract-fields", async (req, res) => {
         "--single-process",
         "--headless=new"
       ],
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || await puppeteer.executablePath(),
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/google-chrome-stable",
     });
     
     const page = await browser.newPage();
