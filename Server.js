@@ -26,7 +26,6 @@ app.post("/extract-fields", async (req, res) => {
       ],
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || await puppeteer.executablePath(),
     });
-
     const page = await browser.newPage();
     await page.goto(formLink, { waitUntil: "networkidle2" });
 
