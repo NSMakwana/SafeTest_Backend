@@ -53,7 +53,7 @@ app.post("/submit-exam", async (req, res) => {
 
   try {
     const browser = await puppeteer.launch({
-      headless: "new",
+      headless: false, // ⬅️ Change to `false` to see what Puppeteer is doing
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -67,28 +67,37 @@ app.post("/submit-exam", async (req, res) => {
     const page = await browser.newPage();
     await page.goto(formLink, { waitUntil: "networkidle2" });
 
-    // Extract all form field IDs dynamically
+    console.log("✅ Opened Google Form:", formLink);
+
+    // Extract form field names dynamically
     const fieldNames = await page.evaluate(() => {
       return Array.from(document.querySelectorAll("input, select, textarea")).map(input => input.name);
     });
+
+    console.log("📝 Detected Fields:", fieldNames);
 
     // 🔹 Fill all form fields dynamically
     for (let i = 0; i < fieldNames.length; i++) {
       if (answers[i]) {
         await page.type(`input[name='${fieldNames[i]}']`, answers[i]);
+        console.log(`✍️ Typed "${answers[i]}" into ${fieldNames[i]}`);
       }
     }
 
     // 🔹 Click Submit button
-    await Promise.all([
-      page.click("button[type='submit']"),
-      page.waitForNavigation(),
-    ]);
+    await page.waitForSelector("div[role='button']"); // ⬅️ Ensure submit button is available
+    await page.click("div[role='button']");
 
+    console.log("🚀 Clicked Submit Button");
+
+    await page.waitForTimeout(5000); // Wait for submission to complete
     await browser.close();
+    
+    console.log("✅ Form Submitted Successfully");
     res.json({ message: "Form submitted successfully" });
+
   } catch (error) {
-    console.error("Error submitting form:", error);
+    console.error("❌ Error submitting form:", error);
     res.status(500).json({ error: "Failed to submit form" });
   }
 });
