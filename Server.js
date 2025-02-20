@@ -15,7 +15,18 @@ app.post("/extract-fields", async (req, res) => {
   }
 
   try {
-    const browser = await puppeteer.launch({ args: ["--no-sandbox"] });
+    const browser = await puppeteer.launch({
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--single-process",
+        "--headless=new"
+      ],
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || await puppeteer.executablePath(),
+    });
+    
     const page = await browser.newPage();
     await page.goto(formLink, { waitUntil: "networkidle2" });
 
