@@ -16,15 +16,14 @@ app.post("/extract-fields", async (req, res) => {
 
   try {
     const browser = await puppeteer.launch({
+      headless: "new",
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-gpu",
         "--disable-dev-shm-usage",
-        "--single-process",
-        "--headless=new"
-      ],
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/google-chrome-stable",
+        "--single-process"
+      ]
     });
     
     const page = await browser.newPage();
