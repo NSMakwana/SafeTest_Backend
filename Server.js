@@ -1,106 +1,87 @@
 const express = require("express");
 const puppeteer = require("puppeteer");
-const cors = require("cors");
 
 const app = express();
 app.use(express.json());
-app.use(cors()); // Enable CORS to allow frontend to communicate with backend
 
-// 🔹 Extract all form field IDs dynamically
+// 🔹 Route to Extract Google Form Field Names
 app.post("/extract-fields", async (req, res) => {
-  const { formLink } = req.body;
+    const { formLink } = req.body;
 
-  if (!formLink.includes("viewform")) {
-    return res.status(400).json({ error: "Invalid Google Form link" });
-  }
-
-  try {
-    const browser = await puppeteer.launch({
-      headless: "new",
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-gpu",
-        "--disable-dev-shm-usage",
-        "--single-process"
-      ],
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || await puppeteer.executablePath(),
-    });
-    const page = await browser.newPage();
-    await page.goto(formLink, { waitUntil: "networkidle2" });
-
-    // Extract all form field IDs dynamically
-    const fieldNames = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll("input, select, textarea")).map(input => input.name);
-    });
-
-    await browser.close();
-    res.json({ fieldNames });
-  } catch (error) {
-    console.error("Error extracting fields:", error);
-    res.status(500).json({ error: "Failed to extract form fields" });
-  }
-});
-
-// 🔹 Submit the form dynamically (No Separate Name & Email Fields)
-app.post("/submit-exam", async (req, res) => {
-  const { formLink, answers } = req.body;
-
-  if (!formLink.includes("viewform")) {
-    return res.status(400).json({ error: "Invalid Google Form link" });
-  }
-
-  try {
-    const browser = await puppeteer.launch({
-      headless: false, // ⬅️ Change to `false` to see what Puppeteer is doing
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-gpu",
-        "--disable-dev-shm-usage",
-        "--single-process"
-      ],
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || await puppeteer.executablePath(),
-    });
-
-    const page = await browser.newPage();
-    await page.goto(formLink, { waitUntil: "networkidle2" });
-
-    console.log("✅ Opened Google Form:", formLink);
-
-    // Extract form field names dynamically
-    const fieldNames = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll("input, select, textarea")).map(input => input.name);
-    });
-
-    console.log("📝 Detected Fields:", fieldNames);
-
-    // 🔹 Fill all form fields dynamically
-    for (let i = 0; i < fieldNames.length; i++) {
-      if (answers[i]) {
-        await page.type(`input[name='${fieldNames[i]}']`, answers[i]);
-        console.log(`✍️ Typed "${answers[i]}" into ${fieldNames[i]}`);
-      }
+    if (!formLink || !formLink.includes("viewform")) { // More robust check
+        return res.status(400).json({ error: "Invalid Google Form link" });
     }
 
-    // 🔹 Click Submit button
-    await page.waitForSelector("div[role='button']"); // ⬅️ Ensure submit button is available
-    await page.click("div[role='button']");
+    try {
+        const browser = await puppeteer.launch({ 
+            headless: true, 
+            args: ['--no-sandbox', '--disable-setuid-sandbox'] // Crucial for server environments
+        });
+        const page = await browser.newPage();
 
-    console.log("🚀 Clicked Submit Button");
+        await page.goto(formLink, { waitUntil: 'networkidle2' }); // Wait for page to fully load
 
-    await page.waitForTimeout(5000); // Wait for submission to complete
-    await browser.close();
-    
-    console.log("✅ Form Submitted Successfully");
-    res.json({ message: "Form submitted successfully" });
+        const fieldNames = await page.evaluate(() => {
+            const inputs = document.querySelectorAll("input, textarea, select");
+            return Array.from(inputs).map(input => ({
+                name: input.name,
+                type: input.tagName.toLowerCase(),
+                id: input.id, // Include the ID as well, it might be used
+            }));
+        });
 
-  } catch (error) {
-    console.error("❌ Error submitting form:", error);
-    res.status(500).json({ error: "Failed to submit form" });
-  }
+        await browser.close();
+        res.json({ fieldNames });
+    } catch (error) {
+        console.error("Error extracting fields:", error);
+        res.status(500).json({ error: "Failed to extract form fields" });
+    }
 });
 
-// Start the server
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+// 🔹 Route to Submit Form Data Automatically
+app.post("/submit-exam", async (req, res) => {
+    const { formLink, studentName, studentEmail, answers } = req.body;
+
+    if (!formLink || !formLink.includes("viewform")) { // More robust check
+        return res.status(400).json({ error: "Invalid Google Form link" });
+    }
+
+    try {
+        const browser = await puppeteer.launch({ 
+            headless: true, 
+            args: ['--no-sandbox', '--disable-setuid-sandbox'] // Crucial for server environments
+        });
+        const page = await browser.newPage();
+        await page.goto(formLink, { waitUntil: 'networkidle2' }); // Wait for the page to load
+
+        // 🔹 Fill in the form dynamically (Improved)
+        await page.type("input[name*='entry.'][type='text']", studentName); // More flexible selector
+        await page.type("input[name*='entry.'][type='email']", studentEmail); // More flexible selector
+
+        for (const [field, answer] of Object.entries(answers)) {
+            const inputSelector = `[name='${field}'], [id='${field}']`; // Try name, then ID
+            const inputElement = await page.waitForSelector(inputSelector); // Wait for input to exist
+            const inputType = await page.evaluate(el => el.type, inputElement);
+            
+            if (inputType === 'radio' || inputType === 'checkbox') {
+                await inputElement.click(); // Handle radio buttons and checkboxes
+            } else {
+                await inputElement.type(answer);
+            }
+        }
+
+        // 🔹 Submit the form (Improved)
+        await Promise.all([
+            page.click("button[type='submit']"), // Or a more specific selector if needed
+            page.waitForNavigation({ waitUntil: 'networkidle2' }), // Wait for navigation to complete
+        ]);
+
+        await browser.close();
+        res.json({ message: "Form submitted successfully" });
+    } catch (error) {
+        console.error("Error submitting form:", error);
+        res.status(500).json({ error: "Failed to submit form" });
+    }
+});
+
+app.listen(5000, () => console.log("Server running on port 5000"));
