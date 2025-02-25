@@ -4,29 +4,27 @@ const puppeteer = require("puppeteer");
 const app = express();
 app.use(express.json());
 
-// 🔹 Route to Extract Google Form Field Names
 app.post("/extract-fields", async (req, res) => {
     const { formLink } = req.body;
 
-    if (!formLink || !formLink.includes("viewform")) { // More robust check
+    if (!formLink || !formLink.includes("viewform")) {
         return res.status(400).json({ error: "Invalid Google Form link" });
     }
 
     try {
-        const browser = await puppeteer.launch({ 
-            headless: true, 
-            args: ['--no-sandbox', '--disable-setuid-sandbox'] // Crucial for server environments
+        const browser = await puppeteer.launch({
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
         const page = await browser.newPage();
-
-        await page.goto(formLink, { waitUntil: 'networkidle2' }); // Wait for page to fully load
+        await page.goto(formLink, { waitUntil: 'networkidle2' });
 
         const fieldNames = await page.evaluate(() => {
             const inputs = document.querySelectorAll("input, textarea, select");
             return Array.from(inputs).map(input => ({
                 name: input.name,
                 type: input.tagName.toLowerCase(),
-                id: input.id, // Include the ID as well, it might be used
+                id: input.id,
             }));
         });
 
@@ -38,43 +36,67 @@ app.post("/extract-fields", async (req, res) => {
     }
 });
 
-// 🔹 Route to Submit Form Data Automatically
 app.post("/submit-exam", async (req, res) => {
     const { formLink, studentName, studentEmail, answers } = req.body;
 
-    if (!formLink || !formLink.includes("viewform")) { // More robust check
+    if (!formLink || !formLink.includes("viewform")) {
         return res.status(400).json({ error: "Invalid Google Form link" });
     }
 
     try {
-        const browser = await puppeteer.launch({ 
-            headless: true, 
-            args: ['--no-sandbox', '--disable-setuid-sandbox'] // Crucial for server environments
+        const browser = await puppeteer.launch({
+            headless: true, // Set to false for debugging
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
         const page = await browser.newPage();
-        await page.goto(formLink, { waitUntil: 'networkidle2' }); // Wait for the page to load
+        await page.goto(formLink, { waitUntil: 'networkidle2' });
 
-        // 🔹 Fill in the form dynamically (Improved)
-        await page.type("input[name*='entry.'][type='text']", studentName); // More flexible selector
-        await page.type("input[name*='entry.'][type='email']", studentEmail); // More flexible selector
+        console.log("Page loaded. URL:", page.url());
+
+        // Fill student name and email (using more flexible selectors)
+        await page.type("input[name*='entry.'][type='text']", studentName);  // Adjust if needed
+        await page.type("input[name*='entry.'][type='email']", studentEmail); // Adjust if needed
 
         for (const [field, answer] of Object.entries(answers)) {
-            const inputSelector = `[name='${field}'], [id='${field}']`; // Try name, then ID
-            const inputElement = await page.waitForSelector(inputSelector); // Wait for input to exist
-            const inputType = await page.evaluate(el => el.type, inputElement);
-            
-            if (inputType === 'radio' || inputType === 'checkbox') {
-                await inputElement.click(); // Handle radio buttons and checkboxes
-            } else {
-                await inputElement.type(answer);
+            const inputSelector = `[name='${field}'], [id='${field}']`;
+            try {
+                const inputElement = await page.waitForSelector(inputSelector, { timeout: 5000 }); // 5-second timeout
+                const inputType = await page.evaluate(el => el.type, inputElement);
+
+                if (inputType === 'radio' || inputType === 'checkbox') {
+                    // Handle radio buttons and checkboxes by value
+                    await page.evaluate((el, val) => {
+                        const elements = document.querySelectorAll(`input[name='${el.name}']`);
+                        elements.forEach(element => {
+                            if (element.value === val) {
+                                element.click();
+                            }
+                        });
+                    }, inputElement, answer);
+
+                } else if (inputType === 'select-one') { // Handle dropdowns
+                    await page.select(inputSelector, answer);
+
+                } else {
+                    await inputElement.type(answer);
+                }
+                console.log(`Filled field: ${field} with value: ${answer}`);
+
+            } catch (fieldError) {
+                console.error(`Error filling field ${field}:`, fieldError);
+                // Optionally, throw the error to stop execution:
+                // throw fieldError;
             }
         }
 
-        // 🔹 Submit the form (Improved)
+        console.log("Attempting to submit...");
+
         await Promise.all([
-            page.click("button[type='submit']"), // Or a more specific selector if needed
-            page.waitForNavigation({ waitUntil: 'networkidle2' }), // Wait for navigation to complete
+            page.click("button[type='submit']"), // Or a more specific selector
+            page.waitForNavigation({ waitUntil: 'networkidle2' }),
         ]);
+
+        console.log("Navigation complete. URL after submit:", page.url());
 
         await browser.close();
         res.json({ message: "Form submitted successfully" });
