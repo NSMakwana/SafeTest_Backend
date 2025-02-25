@@ -2,6 +2,21 @@ const express = require("express");
 const puppeteer = require("puppeteer");
 
 const app = express();
+const allowedOrigins = [
+    "https://safe-test-lake.vercel.app",
+   
+    "http://localhost:3000" // For local development (optional, but recommended)
+];
+
+app.use(cors({
+    origin: function (origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) { // Allow requests with no origin (like Postman)
+            callback(null, true)
+        } else {
+            callback(new Error('Not allowed by CORS'))
+        }
+    }
+}));
 app.use(express.json());
 
 app.post("/extract-fields", async (req, res) => {
