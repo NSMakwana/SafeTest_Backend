@@ -1,5 +1,7 @@
+const cors = require('cors'); 
 const express = require("express");
 const puppeteer = require("puppeteer");
+
 
 const app = express();
 const allowedOrigins = [
