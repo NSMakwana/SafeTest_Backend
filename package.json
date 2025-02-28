@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "main": "Server.js",
   "scripts": {
-  "install": "npx puppeteer browsers install chrome",
-  "start": "node server.js"
-},
+    "install": "npx puppeteer browsers install chrome",
+    "start": "node server.js"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
