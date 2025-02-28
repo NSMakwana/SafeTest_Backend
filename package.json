@@ -2,11 +2,10 @@
   "name": "safetest_backend",
   "version": "1.0.0",
   "main": "Server.js",
- "scripts": {
+  "scripts": {
   "install": "npx puppeteer browsers install chrome",
   "start": "node server.js"
-}
-,
+},
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -14,6 +13,6 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.21.2",
-    "puppeteer": "^24.2.1"
+    "puppeteer": "^24.3.0"
   }
 }

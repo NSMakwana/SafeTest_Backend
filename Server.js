@@ -31,6 +31,7 @@ app.post("/extract-fields", async (req, res) => {
     try {
         const browser = await puppeteer.launch({
             headless: true,
+            executablePath: puppeteer.executablePath(), // Uses Puppeteer's bundled Chromium
             args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
         const page = await browser.newPage();
