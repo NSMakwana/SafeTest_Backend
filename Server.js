@@ -29,7 +29,7 @@ app.post("/extract-fields", async (req, res) => {
     try {
         const browser = await puppeteer.launch({
             headless: "new", // Fixes headless mode issues
-            executablePath: puppeteer.executablePath(), // Uses Puppeteer's built-in Chromium
+            executablePath: "/usr/bin/google-chrome-stable", // Uses Puppeteer's built-in Chromium
             args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
         
