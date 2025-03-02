@@ -47,7 +47,7 @@ app.post("/submit-form", async (req, res) => {
     });
     res.json({ success: true, response: response.data });
   } catch (error) {
-    console.error("Error submitting form:", error.response?.data || error.message);
+    console.error(" Error submitting form:", error.response?.data || error.message);
     res.status(500).json({ error: "Failed to submit form." });
   }
 });
