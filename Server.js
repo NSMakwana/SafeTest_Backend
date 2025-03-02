@@ -6,11 +6,10 @@ const axios = require("axios");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors()); // Allow all origins (for local testing)
+app.use(cors()); 
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Endpoint to handle form submission
 app.post("/submit-form", async (req, res) => {
   try {
     const { formAction, answers } = req.body;
@@ -19,17 +18,11 @@ app.post("/submit-form", async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid data" });
     }
 
-    // Convert answers to URL-encoded format
     const formData = new URLSearchParams();
     Object.entries(answers).forEach(([key, value]) => {
-      if (Array.isArray(value)) {
-        value.forEach((val) => formData.append(key, val)); // Handle checkboxes
-      } else {
-        formData.append(key, value);
-      }
+      formData.append(key, value);
     });
 
-    // Send POST request to Google Forms
     await axios.post(formAction, formData, { headers: { "Content-Type": "application/x-www-form-urlencoded" } });
 
     res.json({ success: true, message: "Form submitted successfully!" });
