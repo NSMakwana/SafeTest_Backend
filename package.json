@@ -9,10 +9,21 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
   "dependencies": {
+    "axios": "^1.8.1",
+    "body-parser": "^1.20.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "puppeteer": "^24.3.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NSMakwana/SafeTest_Backend.git"
+  },
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/NSMakwana/SafeTest_Backend/issues"
+  },
+  "homepage": "https://github.com/NSMakwana/SafeTest_Backend#readme",
+  "description": ""
 }
