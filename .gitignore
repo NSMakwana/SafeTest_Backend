@@ -12,6 +12,8 @@
 /build
 
 # misc
+.env.example
+.env
 .DS_Store
 .env.local
 .env.development.local
@@ -23,3 +25,4 @@ yarn-debug.log*
 yarn-error.log*
 
 /config/SafeTest_servicekey.json
+/credentials/safetest-452516-00efdb9f8fb2.json
