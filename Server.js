@@ -79,44 +79,31 @@ app.get("/proxy-form/:formId", async (req, res) => {
 
     let html = response.data;
 
+    // Inject base href tag if not present so relative form action targets Google Forms correctly
+    if (!html.includes("<base ")) {
+      html = html.replace("<head>", `<head><base href="https://docs.google.com/forms/d/e/${formId}/">`);
+    }
+
     // Inject SafeTest Auto-Submit listener script right before </body>
     const injectedScript = `
     <script>
       (function() {
         console.log("🛡️ SafeTest Proctor Frame Listener Active");
-
-        function triggerFormSubmit() {
-          console.log("⚡ SafeTest: Auto-submitting Google Form on rule violation...");
-
-          var btn = document.querySelector('div[role="button"][jsname="M2HAEc"]') ||
-                    document.querySelector('div[role="button"][aria-label*="Submit" i]') ||
-                    document.querySelector('div[role="button"][aria-label*="Send" i]') ||
-                    document.querySelector('div[role="button"][aria-label*="Submit"]');
-
-          if (btn) {
-            var opts = { bubbles: true, cancelable: true, view: window };
-            try { btn.dispatchEvent(new PointerEvent('pointerdown', opts)); } catch(e) {}
-            try { btn.dispatchEvent(new MouseEvent('mousedown', opts)); } catch(e) {}
-            try { btn.dispatchEvent(new PointerEvent('pointerup', opts)); } catch(e) {}
-            try { btn.dispatchEvent(new MouseEvent('mouseup', opts)); } catch(e) {}
-            try { btn.dispatchEvent(new MouseEvent('click', opts)); } catch(e) {}
-            if (typeof btn.click === 'function') btn.click();
-          }
-
-          var form = document.querySelector('form');
-          if (form) {
-            try {
-              if (typeof form.requestSubmit === 'function') form.requestSubmit();
-              else form.submit();
-            } catch(err) {
-              console.warn("Form submit notice:", err.message);
-            }
-          }
-        }
-
         window.addEventListener("message", function(event) {
           if (event.data === "SAFETEST_AUTOSUBMIT" || (event.data && event.data.type === "SAFETEST_AUTOSUBMIT")) {
-            triggerFormSubmit();
+            console.log("⚡ SafeTest: Auto-submitting Google Form on rule violation...");
+            var btn = document.querySelector('div[role="button"][jsname="M2HAEc"]') ||
+                      document.querySelector('div[role="button"][aria-label*="Submit" i]') ||
+                      document.querySelector('div[role="button"][aria-label*="Send" i]');
+            if (btn) {
+              btn.click();
+            } else {
+              var form = document.querySelector('form');
+              if (form) {
+                if (typeof form.requestSubmit === 'function') form.requestSubmit();
+                else form.submit();
+              }
+            }
           }
         });
       })();
