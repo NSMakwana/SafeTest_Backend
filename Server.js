@@ -79,11 +79,10 @@ app.get("/proxy-form/:formId", async (req, res) => {
 
     let html = response.data;
 
-    // Rewrite form action attribute to point directly to Google Forms absolute submission URL
-    html = html.replace(
-      /action="(\.\/)?formResponse[^"]*"/gi,
-      `action="https://docs.google.com/forms/d/e/${formId}/formResponse?embedded=true"`
-    );
+    // Inject base href tag if not present so relative form action targets Google Forms correctly
+    if (!html.includes("<base ")) {
+      html = html.replace("<head>", `<head><base href="https://docs.google.com/forms/d/e/${formId}/">`);
+    }
 
     // Inject SafeTest Auto-Submit listener script right before </body>
     const injectedScript = `
