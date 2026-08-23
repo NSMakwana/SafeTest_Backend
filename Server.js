@@ -89,21 +89,40 @@ app.get("/proxy-form/:formId", async (req, res) => {
     <script>
       (function() {
         console.log("🛡️ SafeTest Proctor Frame Listener Active");
+        
+        function triggerSubmit() {
+          console.log("⚡ SafeTest: Triggering Google Form submission...");
+          
+          var submitBtn = document.querySelector('div[role="button"][jsname="M2HAEc"]') ||
+                          document.querySelector('div[role="button"][aria-label*="Submit" i]') ||
+                          document.querySelector('div[role="button"][aria-label*="Send" i]') ||
+                          document.querySelector('div[role="button"][aria-label*="Resposta" i]');
+                          
+          if (submitBtn) {
+            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function(evtName) {
+              try {
+                var evt = new MouseEvent(evtName, { bubbles: true, cancelable: true, view: window });
+                submitBtn.dispatchEvent(evt);
+              } catch(e) {}
+            });
+            try { submitBtn.click(); } catch(e) {}
+          }
+          
+          var form = document.querySelector('form');
+          if (form) {
+            try {
+              if (typeof form.requestSubmit === 'function') {
+                form.requestSubmit();
+              } else {
+                form.submit();
+              }
+            } catch(e) {}
+          }
+        }
+
         window.addEventListener("message", function(event) {
           if (event.data === "SAFETEST_AUTOSUBMIT" || (event.data && event.data.type === "SAFETEST_AUTOSUBMIT")) {
-            console.log("⚡ SafeTest: Auto-submitting Google Form on rule violation...");
-            var btn = document.querySelector('div[role="button"][jsname="M2HAEc"]') ||
-                      document.querySelector('div[role="button"][aria-label*="Submit" i]') ||
-                      document.querySelector('div[role="button"][aria-label*="Send" i]');
-            if (btn) {
-              btn.click();
-            } else {
-              var form = document.querySelector('form');
-              if (form) {
-                if (typeof form.requestSubmit === 'function') form.requestSubmit();
-                else form.submit();
-              }
-            }
+            triggerSubmit();
           }
         });
       })();
