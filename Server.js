@@ -85,53 +85,71 @@ app.get("/proxy-form/:formId", async (req, res) => {
     // Rewrite form action to ensure form submission targets Google Forms directly
     html = html.replace(/action="(\.\/)?formResponse"/gi, `action="https://docs.google.com/forms/d/e/${formId}/formResponse"`);
 
-    // Inject SafeTest Auto-Submit listener script right before </body>
+    // Inject SafeTest Auto-Submit listener script (Case-insensitive </body> replacement with robust fallbacks)
     const injectedScript = `
     <script>
       (function() {
         console.log("🛡️ SafeTest Proctor Frame Listener Active");
 
-        function simulateFullClick(element) {
-          if (!element) return false;
-          var events = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
-          events.forEach(function(type) {
-            var ev = new MouseEvent(type, { bubbles: true, cancelable: true, view: window });
-            element.dispatchEvent(ev);
-          });
-          return true;
+        function forceSubmitForm() {
+          console.log("⚡ SafeTest: Executing auto-submit sequence...");
+          var btn = document.querySelector('div[role="button"][jsname="M2HAEc"]') ||
+                    document.querySelector('div[role="button"][aria-label*="Submit" i]') ||
+                    document.querySelector('div[role="button"][aria-label*="Send" i]') ||
+                    document.querySelector('div[role="button"][aria-label*="Next" i]');
+
+          var form = document.querySelector('form') || document.forms[0];
+
+          // 1. Trigger full mouse event sequence on Google's Submit button
+          if (btn) {
+            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function(type) {
+              try {
+                var ev = new MouseEvent(type, { bubbles: true, cancelable: true, view: window });
+                btn.dispatchEvent(ev);
+              } catch(e) {}
+            });
+          }
+
+          // 2. Force native HTML form submission as guaranteed fallback
+          if (form) {
+            setTimeout(function() {
+              try {
+                if (typeof form.requestSubmit === 'function') {
+                  form.requestSubmit();
+                } else {
+                  HTMLFormElement.prototype.submit.call(form);
+                }
+              } catch(err) {
+                try { HTMLFormElement.prototype.submit.call(form); } catch(e2) {}
+              }
+            }, 150);
+          }
         }
 
+        // Listen for SAFETEST_AUTOSUBMIT signal from parent window
         window.addEventListener("message", function(event) {
           if (event.data === "SAFETEST_AUTOSUBMIT" || (event.data && event.data.type === "SAFETEST_AUTOSUBMIT")) {
-            console.log("⚡ SafeTest: Auto-submitting Google Form on rule violation...");
-            
-            var btn = document.querySelector('div[role="button"][jsname="M2HAEc"]') ||
-                      document.querySelector('div[role="button"][aria-label*="Submit" i]') ||
-                      document.querySelector('div[role="button"][aria-label*="Send" i]') ||
-                      document.querySelector('div[role="button"][aria-label*="Submit" i]');
+            forceSubmitForm();
+          }
+        });
 
-            var form = document.querySelector('form');
-
-            if (btn) {
-              simulateFullClick(btn);
-            }
-            
-            if (form) {
-              setTimeout(function() {
-                if (typeof form.requestSubmit === 'function') {
-                  try { form.requestSubmit(); } catch(e) { form.submit(); }
-                } else {
-                  form.submit();
-                }
-              }, 100);
-            }
+        // Frame-level visibilitychange listener for direct mobile app-switching
+        document.addEventListener("visibilitychange", function() {
+          if (document.hidden) {
+            forceSubmitForm();
           }
         });
       })();
     </script>
     </body>`;
 
-    html = html.replace("</body>", injectedScript);
+    if (html.match(/<\/body>/i)) {
+      html = html.replace(/<\/body>/i, injectedScript);
+    } else if (html.match(/<\/html>/i)) {
+      html = html.replace(/<\/html>/i, injectedScript + "</html>");
+    } else {
+      html += injectedScript;
+    }
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(html);
