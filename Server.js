@@ -79,29 +79,40 @@ app.get("/proxy-form/:formId", async (req, res) => {
 
     let html = response.data;
 
-    // Inject base href tag if not present so relative form action targets Google Forms correctly
-    if (!html.includes("<base ")) {
-      html = html.replace("<head>", `<head><base href="https://docs.google.com/forms/d/e/${formId}/">`);
-    }
-
-    // Inject SafeTest Auto-Submit listener script right before </body>
+    // Inject SafeTest Auto-Submit listener script right before </body> (NO <base> tag to prevent CORS JS blocks)
     const injectedScript = `
     <script>
       (function() {
         console.log("🛡️ SafeTest Proctor Frame Listener Active");
+
+        function simulateFullClick(element) {
+          if (!element) return false;
+          var events = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+          events.forEach(function(type) {
+            var ev = new MouseEvent(type, { bubbles: true, cancelable: true, view: window });
+            element.dispatchEvent(ev);
+          });
+          return true;
+        }
+
         window.addEventListener("message", function(event) {
           if (event.data === "SAFETEST_AUTOSUBMIT" || (event.data && event.data.type === "SAFETEST_AUTOSUBMIT")) {
             console.log("⚡ SafeTest: Auto-submitting Google Form on rule violation...");
+            
             var btn = document.querySelector('div[role="button"][jsname="M2HAEc"]') ||
                       document.querySelector('div[role="button"][aria-label*="Submit" i]') ||
-                      document.querySelector('div[role="button"][aria-label*="Send" i]');
+                      document.querySelector('div[role="button"][aria-label*="Send" i]') ||
+                      document.querySelector('div[role="button"][aria-label*="Submit" i]');
+
+            var form = document.querySelector('form');
+
             if (btn) {
-              btn.click();
-            } else {
-              var form = document.querySelector('form');
-              if (form) {
-                if (typeof form.requestSubmit === 'function') form.requestSubmit();
-                else form.submit();
+              simulateFullClick(btn);
+            } else if (form) {
+              if (typeof form.requestSubmit === 'function') {
+                try { form.requestSubmit(); } catch(e) { form.submit(); }
+              } else {
+                form.submit();
               }
             }
           }
