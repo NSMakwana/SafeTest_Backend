@@ -157,8 +157,31 @@ app.get("/proxy-form/:formId", async (req, res) => {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(html);
   } catch (error) {
-    console.error("Proxy error:", error.message);
-    res.redirect(`https://docs.google.com/forms/d/e/${req.params.formId}/viewform?embedded=true`);
+    console.error("Proxy fetch notice:", error.message);
+    // Serve fallback HTML frame with injected auto-submit bridge (NO redirect to docs.google.com to preserve postMessage)
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>body,html,iframe{margin:0;padding:0;width:100%;height:100%;border:none;overflow:hidden;}</style>
+      </head>
+      <body>
+        <iframe id="gframe" src="https://docs.google.com/forms/d/e/${req.params.formId}/viewform?embedded=true" style="width:100%;height:100%;border:none;"></iframe>
+        <script>
+          window.addEventListener("message", function(e) {
+            if (e.data === "SAFETEST_AUTOSUBMIT" || (e.data && e.data.type === "SAFETEST_AUTOSUBMIT")) {
+              var f = document.getElementById("gframe");
+              if (f && f.contentWindow) {
+                try { f.contentWindow.postMessage("SAFETEST_AUTOSUBMIT", "*"); } catch(err) {}
+              }
+            }
+          });
+        </script>
+      </body>
+      </html>
+    `);
   }
 });
 
