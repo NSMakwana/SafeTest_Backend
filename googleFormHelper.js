@@ -22,7 +22,8 @@ async function fetchFormDetails(urlOrId) {
   
   const response = await axios.get(viewUrl, {
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     },
     maxRedirects: 5
   });
@@ -45,9 +46,8 @@ async function fetchFormDetails(urlOrId) {
   const data = JSON.parse(match[1]);
   const formTitle = data[1][8] || data[1][0] || "Google Form";
   const items = data[1][1] || [];
-  // data[1][10][1]: 0 = do not collect, 1 = responder input, 2 = verified
   const emailSetting = data[1][10]?.[1] ?? 0;
-  const collectEmail = emailSetting === 1; // Only show email field for "Responder input"
+  const collectEmail = emailSetting === 1;
 
   const questions = [];
 
@@ -85,55 +85,105 @@ async function fetchFormDetails(urlOrId) {
 }
 
 // Submit answers directly to Google Forms formResponse endpoint
-async function submitFormResponse(formId, answers) {
+async function submitFormResponse(formId, answers, providedFbzx) {
   let details;
   try {
     details = await fetchFormDetails(formId);
   } catch (e) {
-    console.warn("Could not fetch form details before submitting:", e.message);
-    details = { realPublicId: extractFormId(formId), fbzx: "" };
+    console.warn("[SafeTest Backend] Notice: Could not fetch form details before submitting:", e.message);
+    details = { realPublicId: extractFormId(formId), fbzx: providedFbzx || "" };
   }
 
   const cleanId = details.realPublicId;
   const postUrl = `https://docs.google.com/forms/d/e/${cleanId}/formResponse`;
-  console.log(`Posting form response to: ${postUrl}`);
+  console.log(`[SafeTest Backend] Submitting form response to: ${postUrl}`);
 
-  const formData = {
-    fvv: '1',
-    pageHistory: '0'
-  };
+  // Build params URLSearchParams to support array checkbox entries correctly
+  const params = new URLSearchParams();
+  params.append('fvv', '1');
+  params.append('pageHistory', '0');
 
-  if (details.fbzx) {
-    formData.fbzx = details.fbzx;
+  const fbzxToken = providedFbzx || details.fbzx;
+  if (fbzxToken) {
+    params.append('fbzx', fbzxToken);
   }
 
   let answerCount = 0;
   for (const [key, value] of Object.entries(answers || {})) {
     if (value !== undefined && value !== null && value !== '') {
-      if (key === 'emailAddress') {
-        formData.emailAddress = value;
+      const entryKey = key === 'emailAddress' ? 'emailAddress' : (key.startsWith('entry.') ? key : `entry.${key}`);
+      
+      if (Array.isArray(value)) {
+        // Checkboxes array values -> multiple entries for same key
+        value.forEach(val => {
+          if (val !== undefined && val !== null && val !== '') {
+            params.append(entryKey, val);
+            answerCount++;
+          }
+        });
       } else {
-        const entryKey = key.startsWith('entry.') ? key : `entry.${key}`;
-        formData[entryKey] = value;
+        params.append(entryKey, value);
+        answerCount++;
       }
-      answerCount++;
     }
   }
 
-  console.log(`Submitting ${answerCount} answered question(s) (email: ${formData.emailAddress || 'none'}) with fbzx: ${details.fbzx || 'none'}`);
+  console.log(`[SafeTest Backend] Prepared ${answerCount} answered item(s) for submission.`);
 
-  const encodedData = querystring.stringify(formData);
+  try {
+    const res = await axios.post(postUrl, params.toString(), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+      maxRedirects: 5,
+    });
 
-  const res = await axios.post(postUrl, encodedData, {
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    const isSuccessText = res.data && (
+      res.data.includes('Your response has been recorded') ||
+      res.data.includes('recorded') ||
+      res.data.includes('formResponse')
+    );
+
+    const statusOk = res.status === 200 || res.status === 302;
+
+    if (statusOk && isSuccessText) {
+      console.log(`[SafeTest Backend] ✅ Submission verified: HTTP ${res.status}`);
+      return {
+        success: true,
+        submissionStatus: "SUBMITTED",
+        googleResponseStatus: res.status,
+        error: null,
+      };
+    } else if (statusOk) {
+      console.log(`[SafeTest Backend] ⚠️ Submission unverified text: HTTP ${res.status}`);
+      return {
+        success: true,
+        submissionStatus: "SUBMISSION_UNVERIFIED",
+        googleResponseStatus: res.status,
+        error: null,
+      };
+    } else {
+      console.warn(`[SafeTest Backend] ❌ Submission failed: HTTP ${res.status}`);
+      return {
+        success: false,
+        submissionStatus: "SUBMISSION_FAILED",
+        googleResponseStatus: res.status,
+        error: `Google returned HTTP status ${res.status}`,
+      };
     }
-  });
+  } catch (err) {
+    const status = err.response ? err.response.status : 500;
+    const errMsg = err.response && err.response.data ? (typeof err.response.data === 'string' ? err.response.data.slice(0, 200) : JSON.stringify(err.response.data)) : err.message;
+    console.error(`[SafeTest Backend] ❌ Submission error: HTTP ${status} - ${errMsg}`);
 
-  return res.status === 200 || res.status === 302;
+    return {
+      success: false,
+      submissionStatus: "SUBMISSION_FAILED",
+      googleResponseStatus: status,
+      error: `Google Forms submission rejected: ${errMsg}`,
+    };
+  }
 }
 
 module.exports = { extractFormId, fetchFormDetails, submitFormResponse };
-
-

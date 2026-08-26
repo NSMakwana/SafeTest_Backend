@@ -10,6 +10,7 @@ const authRoutes = require("./routes/authRoutes");
 const examRoutes = require("./routes/examRoutes");
 const Submission = require("./models/Submission");
 const ExamRoom = require("./models/ExamRoom");
+const ExamSession = require("./models/ExamSession");
 
 const app = express();
 app.use(express.json());
@@ -28,10 +29,9 @@ mongoose
   })
   .catch((err) => {
     console.warn("⚠️ MongoDB connection error:", err.message);
-    console.warn("⚠️ Ensure 0.0.0.0/0 is whitelisted in MongoDB Atlas Network Access");
   });
 
-// Health check endpoint
+// Health check endpoints
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
@@ -49,7 +49,7 @@ app.get("/health", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/exams", examRoutes);
 
-// Fetch Form Details & Questions (for Proctor Engine)
+// Fetch Form Details & Questions
 app.get("/fetch-form-details/:formId", async (req, res) => {
   try {
     const rawId = req.params.formId;
@@ -62,7 +62,7 @@ app.get("/fetch-form-details/:formId", async (req, res) => {
   }
 });
 
-// Transparent Google Form Proxy with SafeTest Injected Auto-Submit Bridge
+// Reverse Proxy with SafeTest Injected Continuous Answer Tracker
 app.get("/proxy-form/:formId", async (req, res) => {
   try {
     const rawId = req.params.formId;
@@ -87,78 +87,214 @@ app.get("/proxy-form/:formId", async (req, res) => {
 
     let html = response.data;
 
-    // Rewrite form action to ensure form submission targets Google Forms directly
+    // Rewrite form action to point directly to formResponse endpoint
     html = html.replace(/action="(\.\/)?formResponse"/gi, `action="https://docs.google.com/forms/d/e/${formId}/formResponse"`);
 
-    // Inject SafeTest Auto-Submit listener script (Case-insensitive </body> replacement)
-    const injectedScript = `
+    // Injected SafeTest Continuous Answer Tracker script
+    const injectedTrackerScript = `
     <script>
       (function() {
-        console.log("🛡️ SafeTest Proctor Frame Listener Active");
+        console.log("[SafeTest Proxy] Answer tracker initialized for form: ${formId}");
 
-        function forceSubmitGoogleForm() {
-          console.log("⚡ SafeTest: Auto-submitting Google Form on rule violation...");
+        window.SafeTestAnswerState = {
+          answers: {},
+          timestamp: Date.now(),
+          formId: "${formId}"
+        };
 
-          var btn = document.querySelector('div[role="button"][jsname="M2UYVd"]') ||
-                    document.querySelector('div[role="button"][jsname="M2HAEc"]') ||
-                    document.querySelector('div[role="button"][aria-label="Submit" i]') ||
-                    document.querySelector('div[role="button"][aria-label*="Submit" i]') ||
-                    document.querySelector('div[role="button"][aria-label*="Send" i]');
+        var lastReportedJSON = "";
 
-          var form = document.querySelector('form#mG61Hd') || document.querySelector('form') || document.forms[0];
+        // Sweep DOM to extract current answers for all Google Forms question types
+        function scanFormAnswers() {
+          var state = {};
 
-          // 1. Dispatch full touch and mouse click sequence on Submit Button and Child Span
-          if (btn) {
-            var span = btn.querySelector('span');
-            ['pointerdown', 'touchstart', 'mousedown', 'pointerup', 'touchend', 'mouseup', 'click'].forEach(function(evt) {
-              try {
-                var ev = new MouseEvent(evt, { bubbles: true, cancelable: true, view: window });
-                btn.dispatchEvent(ev);
-                if (span) span.dispatchEvent(ev);
-              } catch(e) {}
+          try {
+            // 1. Text Inputs & Textareas (Short Answer & Paragraph)
+            var textInputs = document.querySelectorAll('input[type="text"], input[type="email"], textarea, input:not([type])');
+            textInputs.forEach(function(el) {
+              var name = el.getAttribute('name');
+              var entryId = name || el.getAttribute('data-initial-value');
+              
+              if (!entryId && el.name) entryId = el.name;
+              
+              // Find entry ID from name="entry.XXXXXX"
+              if (name && name.indexOf('entry.') === 0) {
+                var val = el.value ? el.value.trim() : "";
+                if (val) state[name] = val;
+              }
             });
+
+            // 2. Radio Buttons (Multiple Choice & Linear Scale)
+            var radios = document.querySelectorAll('div[role="radio"][aria-checked="true"], input[type="radio"]:checked');
+            radios.forEach(function(el) {
+              var entryId = el.getAttribute('name') || el.getAttribute('data-entry-id');
+              var val = el.getAttribute('data-value') || el.getAttribute('value') || el.getAttribute('aria-label');
+
+              if (!entryId) {
+                var parentContainer = el.closest('[data-params]');
+                if (parentContainer) {
+                  var paramsStr = parentContainer.getAttribute('data-params');
+                  var entryMatch = paramsStr ? paramsStr.match(/entry\.(\d+)/) : null;
+                  if (entryMatch) entryId = 'entry.' + entryMatch[1];
+                }
+              }
+
+              if (entryId && val) {
+                state[entryId] = val.trim();
+              }
+            });
+
+            // 3. Checkboxes (Preserve Multiple Selections as Arrays)
+            var checkboxes = document.querySelectorAll('div[role="checkbox"][aria-checked="true"], input[type="checkbox"]:checked');
+            checkboxes.forEach(function(el) {
+              var entryId = el.getAttribute('name') || el.getAttribute('data-entry-id');
+              var val = el.getAttribute('data-answer-value') || el.getAttribute('data-value') || el.getAttribute('value') || el.getAttribute('aria-label');
+
+              if (!entryId) {
+                var parentContainer = el.closest('[data-params]');
+                if (parentContainer) {
+                  var paramsStr = parentContainer.getAttribute('data-params');
+                  var entryMatch = paramsStr ? paramsStr.match(/entry\.(\d+)/) : null;
+                  if (entryMatch) entryId = 'entry.' + entryMatch[1];
+                }
+              }
+
+              if (entryId && val) {
+                val = val.trim();
+                if (!state[entryId]) {
+                  state[entryId] = [val];
+                } else if (Array.isArray(state[entryId])) {
+                  if (state[entryId].indexOf(val) === -1) {
+                    state[entryId].push(val);
+                  }
+                } else {
+                  state[entryId] = [state[entryId], val];
+                }
+              }
+            });
+
+            // 4. Dropdowns & Selects
+            var selects = document.querySelectorAll('select, div[role="listbox"]');
+            selects.forEach(function(el) {
+              var name = el.getAttribute('name');
+              var val = el.value || el.getAttribute('data-value');
+              if (name && name.indexOf('entry.') === 0 && val) {
+                state[name] = val.trim();
+              }
+            });
+
+            // 5. Date & Time Inputs
+            var dateInputs = document.querySelectorAll('input[type="date"], input[type="time"]');
+            dateInputs.forEach(function(el) {
+              var name = el.getAttribute('name');
+              if (name && name.indexOf('entry.') === 0 && el.value) {
+                state[name] = el.value.trim();
+              }
+            });
+
+            // 6. Generic Sweep for all name="entry.XXXXXX" elements
+            var allEntryInputs = document.querySelectorAll('[name^="entry."]');
+            allEntryInputs.forEach(function(el) {
+              var name = el.getAttribute('name');
+              if (!name) return;
+
+              var type = el.getAttribute('type');
+              if (type === 'radio' && !el.checked) return;
+              if (type === 'checkbox' && !el.checked) return;
+
+              var val = el.value;
+              if (val !== undefined && val !== null && val !== '') {
+                if (type === 'checkbox') {
+                  if (!state[name]) state[name] = [val];
+                  else if (Array.isArray(state[name]) && state[name].indexOf(val) === -1) state[name].push(val);
+                } else {
+                  state[name] = val;
+                }
+              }
+            });
+          } catch(err) {
+            console.warn("[SafeTest Proxy] Error scanning form answers:", err.message);
           }
 
-          // 2. Direct Native C++ Form Submission (Bypasses required-field validation blocks)
-          if (form) {
-            try {
-              HTMLFormElement.prototype.submit.call(form);
-            } catch(err) {
-              try { form.submit(); } catch(e2) {}
-            }
+          window.SafeTestAnswerState.answers = state;
+          window.SafeTestAnswerState.timestamp = Date.now();
+
+          // Send continuous snapshot update if answers changed
+          var currentJSON = JSON.stringify(state);
+          if (currentJSON !== lastReportedJSON && currentJSON !== "{}") {
+            lastReportedJSON = currentJSON;
+            console.log("[SafeTest Proxy] Answer changed:", Object.keys(state).length, "item(s)");
+            sendSnapshotToParent("SAFETEST_ANSWER_UPDATE");
           }
+
+          return state;
         }
 
-        // Listen for SAFETEST_AUTOSUBMIT signal from parent window
+        function sendSnapshotToParent(msgType) {
+          scanFormAnswers();
+          var payload = {
+            type: msgType,
+            answers: window.SafeTestAnswerState.answers,
+            timestamp: window.SafeTestAnswerState.timestamp,
+            formId: "${formId}"
+          };
+
+          try {
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage(payload, "*");
+            }
+          } catch(e) {}
+        }
+
+        // Attach event listeners for continuous tracking
+        ['input', 'change', 'blur', 'click'].forEach(function(evtType) {
+          document.addEventListener(evtType, function() {
+            setTimeout(scanFormAnswers, 100);
+          }, true);
+        });
+
+        // MutationObserver for dynamic Google Forms DOM changes
+        try {
+          var observer = new MutationObserver(function() {
+            scanFormAnswers();
+          });
+          observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+        } catch(e) {}
+
+        // Listen for requests from parent React App
         window.addEventListener("message", function(event) {
-          if (event.data === "SAFETEST_AUTOSUBMIT" || (event.data && event.data.type === "SAFETEST_AUTOSUBMIT")) {
-            forceSubmitGoogleForm();
+          if (!event.data) return;
+          var msgType = typeof event.data === 'string' ? event.data : event.data.type;
+          
+          if (msgType === "SAFETEST_REQUEST_FINAL_ANSWERS" || msgType === "SAFETEST_AUTOSUBMIT") {
+            console.log("[SafeTest Proxy] Final answer snapshot requested!");
+            sendSnapshotToParent("SAFETEST_FINAL_ANSWERS");
           }
         });
 
-        // Frame-level visibilitychange listener for direct mobile app-switching
-        document.addEventListener("visibilitychange", function() {
-          if (document.hidden) {
-            forceSubmitGoogleForm();
-          }
-        });
+        // Periodic snapshot report every 3 seconds
+        setInterval(function() {
+          sendSnapshotToParent("SAFETEST_ANSWER_UPDATE");
+        }, 3000);
+
+        // Initial scan
+        setTimeout(scanFormAnswers, 500);
       })();
     </script>
     </body>`;
 
     if (html.match(/<\/body>/i)) {
-      html = html.replace(/<\/body>/i, injectedScript);
+      html = html.replace(/<\/body>/i, injectedTrackerScript);
     } else if (html.match(/<\/html>/i)) {
-      html = html.replace(/<\/html>/i, injectedScript + "</html>");
+      html = html.replace(/<\/html>/i, injectedTrackerScript + "</html>");
     } else {
-      html += injectedScript;
+      html += injectedTrackerScript;
     }
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(html);
   } catch (error) {
-    console.error("Proxy fetch notice:", error.message);
-    // Serve fallback HTML frame with injected auto-submit bridge (NO redirect to docs.google.com to preserve postMessage)
+    console.error("[SafeTest Proxy] Fetch notice:", error.message);
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(`
       <!DOCTYPE html>
@@ -171,11 +307,9 @@ app.get("/proxy-form/:formId", async (req, res) => {
         <iframe id="gframe" src="https://docs.google.com/forms/d/e/${req.params.formId}/viewform?embedded=true" style="width:100%;height:100%;border:none;"></iframe>
         <script>
           window.addEventListener("message", function(e) {
-            if (e.data === "SAFETEST_AUTOSUBMIT" || (e.data && e.data.type === "SAFETEST_AUTOSUBMIT")) {
-              var f = document.getElementById("gframe");
-              if (f && f.contentWindow) {
-                try { f.contentWindow.postMessage("SAFETEST_AUTOSUBMIT", "*"); } catch(err) {}
-              }
+            var f = document.getElementById("gframe");
+            if (f && f.contentWindow) {
+              try { f.contentWindow.postMessage(e.data, "*"); } catch(err) {}
             }
           });
         </script>
@@ -194,7 +328,7 @@ app.all(["/proxy-form/formResponse", "/proxy-form/:formId/formResponse"], expres
       ? `https://docs.google.com/forms/d/e/${formId}/formResponse`
       : "https://docs.google.com/forms/d/e/formResponse";
 
-    console.log(`⚡ Proxying POST form response to: ${postUrl}`);
+    console.log(`[SafeTest Backend] Proxying POST form response to: ${postUrl}`);
 
     const response = await axios.post(postUrl, querystring.stringify(req.body), {
       headers: {
@@ -206,12 +340,12 @@ app.all(["/proxy-form/formResponse", "/proxy-form/:formId/formResponse"], expres
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(response.data);
   } catch (err) {
-    console.warn("Proxy POST submit notice:", err.message);
+    console.warn("[SafeTest Backend] Proxy POST submit notice:", err.message);
     res.status(200).send("<h3>Your response has been recorded.</h3>");
   }
 });
 
-// Direct Form Response Submission (Fallback/Server-side)
+// Direct Form Response Submission Endpoint
 app.post("/submit-form-response", async (req, res) => {
   try {
     const { formId, formLink, answers, fbzx } = req.body;
@@ -224,7 +358,7 @@ app.post("/submit-form-response", async (req, res) => {
     const result = await submitFormResponse(targetId, answers || {}, fbzx);
     res.json(result);
   } catch (error) {
-    console.error("Submission failed:", error.message);
+    console.error("[SafeTest Backend] Submission failed:", error.message);
     res.status(500).json({ error: "Submission failed: " + error.message });
   }
 });
