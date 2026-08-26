@@ -74,7 +74,12 @@ app.get("/proxy-form/:formId", async (req, res) => {
         "User-Agent":
           req.headers["user-agent"] ||
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": req.headers["accept-language"] || "en-US,en;q=0.9",
+        "Sec-Fetch-Dest": "iframe",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "cross-site",
+        "Upgrade-Insecure-Requests": "1",
         Cookie: req.headers.cookie || "",
       },
       responseType: "text",
@@ -85,58 +90,56 @@ app.get("/proxy-form/:formId", async (req, res) => {
     // Rewrite form action to ensure form submission targets Google Forms directly
     html = html.replace(/action="(\.\/)?formResponse"/gi, `action="https://docs.google.com/forms/d/e/${formId}/formResponse"`);
 
-    // Inject SafeTest Auto-Submit listener script (Case-insensitive </body> replacement with robust fallbacks)
+    // Inject SafeTest Auto-Submit listener script (Case-insensitive </body> replacement)
     const injectedScript = `
     <script>
       (function() {
         console.log("🛡️ SafeTest Proctor Frame Listener Active");
 
-        function forceSubmitForm() {
-          console.log("⚡ SafeTest: Executing auto-submit sequence...");
-          var btn = document.querySelector('div[role="button"][jsname="M2HAEc"]') ||
+        function forceSubmitGoogleForm() {
+          console.log("⚡ SafeTest: Auto-submitting Google Form on rule violation...");
+
+          var btn = document.querySelector('div[role="button"][jsname="M2UYVd"]') ||
+                    document.querySelector('div[role="button"][jsname="M2HAEc"]') ||
+                    document.querySelector('div[role="button"][aria-label="Submit" i]') ||
                     document.querySelector('div[role="button"][aria-label*="Submit" i]') ||
-                    document.querySelector('div[role="button"][aria-label*="Send" i]') ||
-                    document.querySelector('div[role="button"][aria-label*="Next" i]');
+                    document.querySelector('div[role="button"][aria-label*="Send" i]');
 
-          var form = document.querySelector('form') || document.forms[0];
+          var form = document.querySelector('form#mG61Hd') || document.querySelector('form') || document.forms[0];
 
-          // 1. Trigger full mouse event sequence on Google's Submit button
+          // 1. Dispatch full touch and mouse click sequence on Submit Button and Child Span
           if (btn) {
-            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function(type) {
+            var span = btn.querySelector('span');
+            ['pointerdown', 'touchstart', 'mousedown', 'pointerup', 'touchend', 'mouseup', 'click'].forEach(function(evt) {
               try {
-                var ev = new MouseEvent(type, { bubbles: true, cancelable: true, view: window });
+                var ev = new MouseEvent(evt, { bubbles: true, cancelable: true, view: window });
                 btn.dispatchEvent(ev);
+                if (span) span.dispatchEvent(ev);
               } catch(e) {}
             });
           }
 
-          // 2. Force native HTML form submission as guaranteed fallback
+          // 2. Direct Native C++ Form Submission (Bypasses required-field validation blocks)
           if (form) {
-            setTimeout(function() {
-              try {
-                if (typeof form.requestSubmit === 'function') {
-                  form.requestSubmit();
-                } else {
-                  HTMLFormElement.prototype.submit.call(form);
-                }
-              } catch(err) {
-                try { HTMLFormElement.prototype.submit.call(form); } catch(e2) {}
-              }
-            }, 150);
+            try {
+              HTMLFormElement.prototype.submit.call(form);
+            } catch(err) {
+              try { form.submit(); } catch(e2) {}
+            }
           }
         }
 
         // Listen for SAFETEST_AUTOSUBMIT signal from parent window
         window.addEventListener("message", function(event) {
           if (event.data === "SAFETEST_AUTOSUBMIT" || (event.data && event.data.type === "SAFETEST_AUTOSUBMIT")) {
-            forceSubmitForm();
+            forceSubmitGoogleForm();
           }
         });
 
         // Frame-level visibilitychange listener for direct mobile app-switching
         document.addEventListener("visibilitychange", function() {
           if (document.hidden) {
-            forceSubmitForm();
+            forceSubmitGoogleForm();
           }
         });
       })();
