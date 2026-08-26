@@ -72,8 +72,10 @@ app.get("/proxy-form/:formId", async (req, res) => {
     const response = await axios.get(googleUrl, {
       headers: {
         "User-Agent":
+          req.headers["user-agent"] ||
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        Cookie: req.headers.cookie || "",
       },
       responseType: "text",
     });
