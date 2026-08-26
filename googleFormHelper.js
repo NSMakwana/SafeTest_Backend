@@ -9,19 +9,26 @@ function extractFormId(urlOrId) {
 
   if (str.includes('/d/e/')) {
     const match = str.match(/\/d\/e\/([^/?#]+)/);
-    if (match) return match[1];
+    if (match && match[1]) return match[1];
   }
 
   if (str.includes('/d/')) {
     const match = str.match(/\/d\/([^/?#]+)/);
-    if (match) return match[1];
+    if (match && match[1]) return match[1];
   }
 
-  return str
-    .replace(/^https?:\/\/[^/]+\//, '')
-    .replace(/^proxy-form\//, '')
+  // Strip leading slashes, protocols, proxy-form prefixes
+  str = str
+    .replace(/^(https?:\/\/[^/]+)?\/?(proxy-form\/)?/, '')
+    .replace(/^\/+/, '')
     .replace(/\/(viewform|edit).*$/, '')
-    .replace(/[^a-zA-Z0-9_-].*$/, '');
+    .replace(/\?.*$/, '')
+    .replace(/#.*$/, '');
+
+  const idMatch = str.match(/([a-zA-Z0-9_-]{15,})/);
+  if (idMatch) return idMatch[1];
+
+  return str;
 }
 
 // Fetch public form structure, entry IDs, and fbzx token

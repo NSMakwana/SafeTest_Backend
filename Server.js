@@ -68,6 +68,8 @@ app.get(["/proxy-form/:formId", "/proxy-form/*"], async (req, res) => {
     const rawId = req.params.formId || req.params[0] || req.url;
     const formId = extractFormId(rawId);
     
+    console.log(`[SafeTest Proxy] Fetching formId: "${formId}" (from raw: "${rawId}")`);
+
     if (!formId) {
       return res.status(400).send("Invalid Google Form ID");
     }
