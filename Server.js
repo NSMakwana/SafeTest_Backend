@@ -62,7 +62,7 @@ app.get("/fetch-form-details/:formId", async (req, res) => {
   }
 });
 
-// Reverse Proxy with SafeTest Injected Continuous Answer Tracker (Supports Client-Side & Server-Side Proxying)
+// Reverse Proxy with SafeTest Injected Continuous Answer Tracker
 app.get(["/proxy-form/:formId", "/proxy-form/*"], async (req, res) => {
   const rawId = req.params.formId || req.params[0] || req.url;
   const formId = extractFormId(rawId);
@@ -73,22 +73,26 @@ app.get(["/proxy-form/:formId", "/proxy-form/*"], async (req, res) => {
     return res.status(400).send("Invalid Google Form ID");
   }
 
-  const googleUrl = `https://docs.google.com/forms/d/e/${formId}/viewform?embedded=true`;
+  // Fetch clean viewform without embedded=true parameter (prevents 401 error from Google)
+  const googleUrl = `https://docs.google.com/forms/d/e/${formId}/viewform`;
 
-  // Server-side fetch attempt first
   try {
     const response = await axios.get(googleUrl, {
       headers: {
         "User-Agent":
           req.headers["user-agent"] ||
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": req.headers["accept-language"] || "en-US,en;q=0.9",
       },
       responseType: "text",
       maxRedirects: 5,
     });
 
     let html = response.data;
+    console.log(`[SafeTest Proxy] ✅ Fetched Google Form HTML for ${formId}: ${html.length} bytes`);
+
+    // Rewrite form action to point directly to formResponse endpoint
     html = html.replace(/action="(\.\/)?formResponse"/gi, `action="https://docs.google.com/forms/d/e/${formId}/formResponse"`);
 
     const injectedScript = `
@@ -181,6 +185,7 @@ app.get(["/proxy-form/:formId", "/proxy-form/*"], async (req, res) => {
           var currentJSON = JSON.stringify(state);
           if (currentJSON !== lastReportedJSON && currentJSON !== "{}") {
             lastReportedJSON = currentJSON;
+            console.log("[SafeTest Proxy] Answer changed:", Object.keys(state).length, "item(s)");
             sendSnapshotToParent("SAFETEST_ANSWER_UPDATE");
           }
           return state;
@@ -214,6 +219,7 @@ app.get(["/proxy-form/:formId", "/proxy-form/*"], async (req, res) => {
           if (!event.data) return;
           var msgType = typeof event.data === 'string' ? event.data : event.data.type;
           if (msgType === "SAFETEST_REQUEST_FINAL_ANSWERS" || msgType === "SAFETEST_AUTOSUBMIT") {
+            console.log("[SafeTest Proxy] Final answer snapshot requested!");
             sendSnapshotToParent("SAFETEST_FINAL_ANSWERS");
           }
         });
@@ -231,42 +237,10 @@ app.get(["/proxy-form/:formId", "/proxy-form/*"], async (req, res) => {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     return res.send(html);
   } catch (err) {
-    console.warn(`[SafeTest Proxy] Server-side fetch notice for ${formId}: ${err.message}. Serving Client-Side Proctor Page.`);
+    console.error(`[SafeTest Proxy] Server-side fetch notice for ${formId}: ${err.message}`);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.status(500).send(`<h3>Failed to load form via proxy: ${err.message}</h3>`);
   }
-
-  // Client-Side Proxy Page (Runs in student's browser with student's Google login cookies!)
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <title>SafeTest Proctor Frame</title>
-      <style>body,html,iframe{margin:0;padding:0;width:100%;height:100%;border:none;overflow:hidden;}</style>
-    </head>
-    <body>
-      <iframe id="gframe" src="${googleUrl}" style="width:100%;height:100%;border:none;" allow="camera; microphone; fullscreen"></iframe>
-      <script>
-        console.log("[SafeTest Proxy] Client-Side Proctor Page Active for form: ${formId}");
-
-        window.addEventListener("message", function(event) {
-          if (!event.data) return;
-          var msgType = typeof event.data === 'string' ? event.data : event.data.type;
-          
-          if (msgType === "SAFETEST_REQUEST_FINAL_ANSWERS" || msgType === "SAFETEST_AUTOSUBMIT") {
-            var frame = document.getElementById("gframe");
-            if (frame && frame.contentWindow) {
-              try {
-                frame.contentWindow.postMessage("SAFETEST_REQUEST_FINAL_ANSWERS", "*");
-                frame.contentWindow.postMessage({ type: "SAFETEST_REQUEST_FINAL_ANSWERS" }, "*");
-              } catch(e) {}
-            }
-          }
-        });
-      </script>
-    </body>
-    </html>
-  `);
 });
 
 // Proxy POST submission fallback for /proxy-form/formResponse
