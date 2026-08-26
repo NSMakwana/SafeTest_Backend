@@ -4,11 +4,24 @@ const querystring = require('querystring');
 // Helper to extract Form ID from any Google Form URL correctly
 function extractFormId(urlOrId) {
   if (!urlOrId) return null;
-  if (urlOrId.includes('http')) {
-    const match = urlOrId.match(/\/d\/e\/([^/]+)/) || urlOrId.match(/\/d\/([^/]+)/);
-    return match ? match[1] : urlOrId;
+  let str = String(urlOrId).trim();
+  try { str = decodeURIComponent(str); } catch(e) {}
+
+  if (str.includes('/d/e/')) {
+    const match = str.match(/\/d\/e\/([^/?#]+)/);
+    if (match) return match[1];
   }
-  return urlOrId;
+
+  if (str.includes('/d/')) {
+    const match = str.match(/\/d\/([^/?#]+)/);
+    if (match) return match[1];
+  }
+
+  return str
+    .replace(/^https?:\/\/[^/]+\//, '')
+    .replace(/^proxy-form\//, '')
+    .replace(/\/(viewform|edit).*$/, '')
+    .replace(/[^a-zA-Z0-9_-].*$/, '');
 }
 
 // Fetch public form structure, entry IDs, and fbzx token

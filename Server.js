@@ -63,16 +63,17 @@ app.get("/fetch-form-details/:formId", async (req, res) => {
 });
 
 // Reverse Proxy with SafeTest Injected Continuous Answer Tracker
-app.get("/proxy-form/:formId", async (req, res) => {
+app.get(["/proxy-form/:formId", "/proxy-form/*"], async (req, res) => {
   try {
-    const rawId = req.params.formId;
+    const rawId = req.params.formId || req.params[0] || req.url;
     const formId = extractFormId(rawId);
     
-    // Try public /d/e/ URL first, fallback to /d/ URL if 401/404
-    let googleUrl = rawId.startsWith("http") ? rawId : `https://docs.google.com/forms/d/e/${formId}/viewform?embedded=true`;
-    if (!googleUrl.includes("viewform")) {
-      googleUrl = googleUrl.replace(/\/edit.*$/, "/viewform");
+    if (!formId) {
+      return res.status(400).send("Invalid Google Form ID");
     }
+
+    // Try public /d/e/ URL first, fallback to /d/ URL if 401/404
+    let googleUrl = `https://docs.google.com/forms/d/e/${formId}/viewform?embedded=true`;
 
     const reqHeaders = {
       "User-Agent":
