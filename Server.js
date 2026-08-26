@@ -67,23 +67,33 @@ app.get("/proxy-form/:formId", async (req, res) => {
   try {
     const rawId = req.params.formId;
     const formId = extractFormId(rawId);
-    const googleUrl = `https://docs.google.com/forms/d/e/${formId}/viewform?embedded=true`;
+    
+    // Try public /d/e/ URL first, fallback to /d/ URL if 401/404
+    let googleUrl = rawId.startsWith("http") ? rawId : `https://docs.google.com/forms/d/e/${formId}/viewform?embedded=true`;
+    if (!googleUrl.includes("viewform")) {
+      googleUrl = googleUrl.replace(/\/edit.*$/, "/viewform");
+    }
 
-    const response = await axios.get(googleUrl, {
-      headers: {
-        "User-Agent":
-          req.headers["user-agent"] ||
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": req.headers["accept-language"] || "en-US,en;q=0.9",
-        "Sec-Fetch-Dest": "iframe",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "cross-site",
-        "Upgrade-Insecure-Requests": "1",
-        Cookie: req.headers.cookie || "",
-      },
-      responseType: "text",
-    });
+    const reqHeaders = {
+      "User-Agent":
+        req.headers["user-agent"] ||
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": req.headers["accept-language"] || "en-US,en;q=0.9",
+      "Sec-Fetch-Dest": "iframe",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "cross-site",
+      "Upgrade-Insecure-Requests": "1",
+    };
+
+    let response;
+    try {
+      response = await axios.get(googleUrl, { headers: reqHeaders, responseType: "text", maxRedirects: 5 });
+    } catch (err1) {
+      console.warn(`[SafeTest Proxy] Initial GET ${googleUrl} notice: ${err1.message}. Trying fallback URL...`);
+      const fallbackUrl = `https://docs.google.com/forms/d/${formId}/viewform?embedded=true`;
+      response = await axios.get(fallbackUrl, { headers: reqHeaders, responseType: "text", maxRedirects: 5 });
+    }
 
     let html = response.data;
 
