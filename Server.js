@@ -62,152 +62,103 @@ app.get("/fetch-form-details/:formId", async (req, res) => {
   }
 });
 
-// Reverse Proxy with SafeTest Injected Continuous Answer Tracker
+// Reverse Proxy with SafeTest Injected Continuous Answer Tracker (Supports Client-Side & Server-Side Proxying)
 app.get(["/proxy-form/:formId", "/proxy-form/*"], async (req, res) => {
+  const rawId = req.params.formId || req.params[0] || req.url;
+  const formId = extractFormId(rawId);
+
+  console.log(`[SafeTest Proxy] Serving proxy for formId: "${formId}" (raw: "${rawId}")`);
+
+  if (!formId) {
+    return res.status(400).send("Invalid Google Form ID");
+  }
+
+  const googleUrl = `https://docs.google.com/forms/d/e/${formId}/viewform?embedded=true`;
+
+  // Server-side fetch attempt first
   try {
-    const rawId = req.params.formId || req.params[0] || req.url;
-    const formId = extractFormId(rawId);
-    
-    console.log(`[SafeTest Proxy] Fetching formId: "${formId}" (from raw: "${rawId}")`);
-
-    if (!formId) {
-      return res.status(400).send("Invalid Google Form ID");
-    }
-
-    // Try public /d/e/ URL first, fallback to /d/ URL if 401/404
-    let googleUrl = `https://docs.google.com/forms/d/e/${formId}/viewform?embedded=true`;
-
-    const reqHeaders = {
-      "User-Agent":
-        req.headers["user-agent"] ||
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-      "Accept-Language": req.headers["accept-language"] || "en-US,en;q=0.9",
-      "Sec-Fetch-Dest": "iframe",
-      "Sec-Fetch-Mode": "navigate",
-      "Sec-Fetch-Site": "cross-site",
-      "Upgrade-Insecure-Requests": "1",
-    };
-
-    let response;
-    try {
-      response = await axios.get(googleUrl, { headers: reqHeaders, responseType: "text", maxRedirects: 5 });
-    } catch (err1) {
-      console.warn(`[SafeTest Proxy] Initial GET ${googleUrl} notice: ${err1.message}. Trying fallback URL...`);
-      const fallbackUrl = `https://docs.google.com/forms/d/${formId}/viewform?embedded=true`;
-      response = await axios.get(fallbackUrl, { headers: reqHeaders, responseType: "text", maxRedirects: 5 });
-    }
+    const response = await axios.get(googleUrl, {
+      headers: {
+        "User-Agent":
+          req.headers["user-agent"] ||
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+      responseType: "text",
+      maxRedirects: 5,
+    });
 
     let html = response.data;
-
-    // Rewrite form action to point directly to formResponse endpoint
     html = html.replace(/action="(\.\/)?formResponse"/gi, `action="https://docs.google.com/forms/d/e/${formId}/formResponse"`);
 
-    // Injected SafeTest Continuous Answer Tracker script
-    const injectedTrackerScript = `
+    const injectedScript = `
     <script>
       (function() {
         console.log("[SafeTest Proxy] Answer tracker initialized for form: ${formId}");
-
-        window.SafeTestAnswerState = {
-          answers: {},
-          timestamp: Date.now(),
-          formId: "${formId}"
-        };
-
+        window.SafeTestAnswerState = { answers: {}, timestamp: Date.now(), formId: "${formId}" };
         var lastReportedJSON = "";
 
-        // Helper to find entry.XXXXXX ID for any Google Forms question element
         function findEntryIdForElement(el) {
           if (!el) return null;
-          
           var name = el.getAttribute('name');
-          if (name && name.indexOf('entry.') === 0) {
-            return name.replace('_sentinel', '');
-          }
+          if (name && name.indexOf('entry.') === 0) return name.replace('_sentinel', '');
 
           var container = el.closest('[data-params], [data-item-id], .freebirdFormviewerViewItemsItemItem, div[role="listitem"], .geItem, .Qr258');
           if (container) {
             var entryInput = container.querySelector('[name^="entry."]');
-            if (entryInput) {
-              var entryName = entryInput.getAttribute('name');
-              if (entryName) return entryName.replace('_sentinel', '');
-            }
-
+            if (entryInput && entryInput.getAttribute('name')) return entryInput.getAttribute('name').replace('_sentinel', '');
             var itemId = container.getAttribute('data-item-id');
             if (itemId) return 'entry.' + itemId;
-
             var params = container.getAttribute('data-params');
             if (params) {
               var match = params.match(/\[(\d{8,12}),/);
               if (match) return 'entry.' + match[1];
             }
           }
-
           return null;
         }
 
-        // Sweep DOM to extract current answers for all Google Forms question types
         function scanFormAnswers() {
           var state = {};
-
           try {
-            // 1. Text Inputs & Textareas (Short Answer & Paragraph)
             var textInputs = document.querySelectorAll('input[type="text"], input[type="email"], textarea, input:not([type])');
             textInputs.forEach(function(el) {
               var entryId = findEntryIdForElement(el);
               var val = el.value ? el.value.trim() : "";
-              if (entryId && val) {
-                state[entryId] = val;
-              }
+              if (entryId && val) state[entryId] = val;
             });
 
-            // 2. Radio Buttons (Multiple Choice & Linear Scale)
             var checkedRadios = document.querySelectorAll('div[role="radio"][aria-checked="true"], input[type="radio"]:checked');
             checkedRadios.forEach(function(el) {
               var entryId = findEntryIdForElement(el);
               var val = el.getAttribute('data-value') || el.getAttribute('value') || el.getAttribute('aria-label') || el.textContent;
-              if (entryId && val) {
-                state[entryId] = val.trim();
-              }
+              if (entryId && val) state[entryId] = val.trim();
             });
 
-            // 3. Checkboxes (Preserve Multiple Selections as Arrays)
             var checkedBoxes = document.querySelectorAll('div[role="checkbox"][aria-checked="true"], input[type="checkbox"]:checked');
             checkedBoxes.forEach(function(el) {
               var entryId = findEntryIdForElement(el);
               var val = el.getAttribute('data-answer-value') || el.getAttribute('data-value') || el.getAttribute('value') || el.getAttribute('aria-label') || el.textContent;
               if (entryId && val) {
                 val = val.trim();
-                if (!state[entryId]) {
-                  state[entryId] = [val];
-                } else if (Array.isArray(state[entryId])) {
-                  if (state[entryId].indexOf(val) === -1) {
-                    state[entryId].push(val);
-                  }
-                } else {
-                  state[entryId] = [state[entryId], val];
-                }
+                if (!state[entryId]) state[entryId] = [val];
+                else if (Array.isArray(state[entryId]) && state[entryId].indexOf(val) === -1) state[entryId].push(val);
+                else state[entryId] = [state[entryId], val];
               }
             });
 
-            // 4. Dropdowns & Selects
             var dropdowns = document.querySelectorAll('select, div[role="listbox"]');
             dropdowns.forEach(function(el) {
               var entryId = findEntryIdForElement(el);
               var val = el.value || el.getAttribute('data-value') || el.getAttribute('aria-label');
-              if (entryId && val) {
-                state[entryId] = val.trim();
-              }
+              if (entryId && val) state[entryId] = val.trim();
             });
 
-            // 5. Generic sweep for all filled elements with name="entry.XXXXXX"
             var allEntryInputs = document.querySelectorAll('[name^="entry."]');
             allEntryInputs.forEach(function(el) {
               var name = el.getAttribute('name');
               if (!name) return;
               var cleanName = name.replace('_sentinel', '');
-
               var type = el.getAttribute('type');
               if (type === 'radio' || type === 'checkbox') {
                 if (el.checked && el.value) {
@@ -222,21 +173,16 @@ app.get(["/proxy-form/:formId", "/proxy-form/*"], async (req, res) => {
                 state[cleanName] = el.value.trim();
               }
             });
-          } catch(err) {
-            console.warn("[SafeTest Proxy] Error scanning form answers:", err.message);
-          }
+          } catch(err) {}
 
           window.SafeTestAnswerState.answers = state;
           window.SafeTestAnswerState.timestamp = Date.now();
 
-          // Send continuous snapshot update if answers changed
           var currentJSON = JSON.stringify(state);
           if (currentJSON !== lastReportedJSON && currentJSON !== "{}") {
             lastReportedJSON = currentJSON;
-            console.log("[SafeTest Proxy] Answer changed:", Object.keys(state).length, "item(s)");
             sendSnapshotToParent("SAFETEST_ANSWER_UPDATE");
           }
-
           return state;
         }
 
@@ -248,7 +194,6 @@ app.get(["/proxy-form/:formId", "/proxy-form/*"], async (req, res) => {
             timestamp: window.SafeTestAnswerState.timestamp,
             formId: "${formId}"
           };
-
           try {
             if (window.parent && window.parent !== window) {
               window.parent.postMessage(payload, "*");
@@ -256,77 +201,72 @@ app.get(["/proxy-form/:formId", "/proxy-form/*"], async (req, res) => {
           } catch(e) {}
         }
 
-        // Attach event listeners for continuous tracking
         ['input', 'change', 'blur', 'click', 'keyup'].forEach(function(evtType) {
-          document.addEventListener(evtType, function() {
-            setTimeout(scanFormAnswers, 100);
-          }, true);
+          document.addEventListener(evtType, function() { setTimeout(scanFormAnswers, 100); }, true);
         });
 
-        // MutationObserver for dynamic Google Forms DOM changes
         try {
-          var observer = new MutationObserver(function() {
-            scanFormAnswers();
-          });
+          var observer = new MutationObserver(function() { scanFormAnswers(); });
           observer.observe(document.body, { childList: true, subtree: true, attributes: true });
         } catch(e) {}
 
-        // Listen for requests from parent React App
         window.addEventListener("message", function(event) {
           if (!event.data) return;
           var msgType = typeof event.data === 'string' ? event.data : event.data.type;
-          
           if (msgType === "SAFETEST_REQUEST_FINAL_ANSWERS" || msgType === "SAFETEST_AUTOSUBMIT") {
-            console.log("[SafeTest Proxy] Final answer snapshot requested!");
             sendSnapshotToParent("SAFETEST_FINAL_ANSWERS");
           }
         });
 
-        // Periodic snapshot report every 2 seconds
-        setInterval(function() {
-          sendSnapshotToParent("SAFETEST_ANSWER_UPDATE");
-        }, 2000);
-
-        // Initial scan
+        setInterval(function() { sendSnapshotToParent("SAFETEST_ANSWER_UPDATE"); }, 2000);
         setTimeout(scanFormAnswers, 500);
       })();
     </script>
     </body>`;
 
-    if (html.match(/<\/body>/i)) {
-      html = html.replace(/<\/body>/i, injectedTrackerScript);
-    } else if (html.match(/<\/html>/i)) {
-      html = html.replace(/<\/html>/i, injectedTrackerScript + "</html>");
-    } else {
-      html += injectedTrackerScript;
-    }
+    if (html.match(/<\/body>/i)) html = html.replace(/<\/body>/i, injectedScript);
+    else if (html.match(/<\/html>/i)) html = html.replace(/<\/html>/i, injectedScript + "</html>");
+    else html += injectedScript;
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.send(html);
-  } catch (error) {
-    console.error("[SafeTest Proxy] Fetch notice:", error.message);
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <style>body,html,iframe{margin:0;padding:0;width:100%;height:100%;border:none;overflow:hidden;}</style>
-      </head>
-      <body>
-        <iframe id="gframe" src="https://docs.google.com/forms/d/e/${req.params.formId}/viewform?embedded=true" style="width:100%;height:100%;border:none;"></iframe>
-        <script>
-          window.addEventListener("message", function(e) {
-            var f = document.getElementById("gframe");
-            if (f && f.contentWindow) {
-              try { f.contentWindow.postMessage(e.data, "*"); } catch(err) {}
-            }
-          });
-        </script>
-      </body>
-      </html>
-    `);
+    return res.send(html);
+  } catch (err) {
+    console.warn(`[SafeTest Proxy] Server-side fetch notice for ${formId}: ${err.message}. Serving Client-Side Proctor Page.`);
   }
+
+  // Client-Side Proxy Page (Runs in student's browser with student's Google login cookies!)
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>SafeTest Proctor Frame</title>
+      <style>body,html,iframe{margin:0;padding:0;width:100%;height:100%;border:none;overflow:hidden;}</style>
+    </head>
+    <body>
+      <iframe id="gframe" src="${googleUrl}" style="width:100%;height:100%;border:none;" allow="camera; microphone; fullscreen"></iframe>
+      <script>
+        console.log("[SafeTest Proxy] Client-Side Proctor Page Active for form: ${formId}");
+
+        window.addEventListener("message", function(event) {
+          if (!event.data) return;
+          var msgType = typeof event.data === 'string' ? event.data : event.data.type;
+          
+          if (msgType === "SAFETEST_REQUEST_FINAL_ANSWERS" || msgType === "SAFETEST_AUTOSUBMIT") {
+            var frame = document.getElementById("gframe");
+            if (frame && frame.contentWindow) {
+              try {
+                frame.contentWindow.postMessage("SAFETEST_REQUEST_FINAL_ANSWERS", "*");
+                frame.contentWindow.postMessage({ type: "SAFETEST_REQUEST_FINAL_ANSWERS" }, "*");
+              } catch(e) {}
+            }
+          }
+        });
+      </script>
+    </body>
+    </html>
+  `);
 });
 
 // Proxy POST submission fallback for /proxy-form/formResponse
