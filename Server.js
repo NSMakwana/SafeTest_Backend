@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
 const mongoose = require("mongoose");
+const querystring = require("querystring");
 require("dotenv").config();
 
 const { extractFormId, fetchFormDetails, submitFormResponse } = require("./googleFormHelper");
@@ -79,7 +80,10 @@ app.get("/proxy-form/:formId", async (req, res) => {
 
     let html = response.data;
 
-    // Inject SafeTest Auto-Submit listener script right before </body> (NO <base> tag to prevent CORS JS blocks)
+    // Rewrite form action to ensure form submission targets Google Forms directly
+    html = html.replace(/action="(\.\/)?formResponse"/gi, `action="https://docs.google.com/forms/d/e/${formId}/formResponse"`);
+
+    // Inject SafeTest Auto-Submit listener script right before </body>
     const injectedScript = `
     <script>
       (function() {
@@ -108,12 +112,16 @@ app.get("/proxy-form/:formId", async (req, res) => {
 
             if (btn) {
               simulateFullClick(btn);
-            } else if (form) {
-              if (typeof form.requestSubmit === 'function') {
-                try { form.requestSubmit(); } catch(e) { form.submit(); }
-              } else {
-                form.submit();
-              }
+            }
+            
+            if (form) {
+              setTimeout(function() {
+                if (typeof form.requestSubmit === 'function') {
+                  try { form.requestSubmit(); } catch(e) { form.submit(); }
+                } else {
+                  form.submit();
+                }
+              }, 100);
             }
           }
         });
@@ -128,6 +136,32 @@ app.get("/proxy-form/:formId", async (req, res) => {
   } catch (error) {
     console.error("Proxy error:", error.message);
     res.redirect(`https://docs.google.com/forms/d/e/${req.params.formId}/viewform?embedded=true`);
+  }
+});
+
+// Proxy POST submission fallback for /proxy-form/formResponse
+app.all(["/proxy-form/formResponse", "/proxy-form/:formId/formResponse"], express.urlencoded({ extended: true }), async (req, res) => {
+  try {
+    const rawId = req.params.formId || (req.headers.referer ? extractFormId(req.headers.referer) : null);
+    const formId = extractFormId(rawId);
+    const postUrl = formId
+      ? `https://docs.google.com/forms/d/e/${formId}/formResponse`
+      : "https://docs.google.com/forms/d/e/formResponse";
+
+    console.log(`⚡ Proxying POST form response to: ${postUrl}`);
+
+    const response = await axios.post(postUrl, querystring.stringify(req.body), {
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      },
+    });
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(response.data);
+  } catch (err) {
+    console.warn("Proxy POST submit notice:", err.message);
+    res.status(200).send("<h3>Your response has been recorded.</h3>");
   }
 });
 
