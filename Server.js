@@ -104,6 +104,36 @@ app.get("/proxy-form/:formId", async (req, res) => {
 
         var lastReportedJSON = "";
 
+        // Helper to find entry.XXXXXX ID for any Google Forms question element
+        function findEntryIdForElement(el) {
+          if (!el) return null;
+          
+          var name = el.getAttribute('name');
+          if (name && name.indexOf('entry.') === 0) {
+            return name.replace('_sentinel', '');
+          }
+
+          var container = el.closest('[data-params], [data-item-id], .freebirdFormviewerViewItemsItemItem, div[role="listitem"], .geItem, .Qr258');
+          if (container) {
+            var entryInput = container.querySelector('[name^="entry."]');
+            if (entryInput) {
+              var entryName = entryInput.getAttribute('name');
+              if (entryName) return entryName.replace('_sentinel', '');
+            }
+
+            var itemId = container.getAttribute('data-item-id');
+            if (itemId) return 'entry.' + itemId;
+
+            var params = container.getAttribute('data-params');
+            if (params) {
+              var match = params.match(/\[(\d{8,12}),/);
+              if (match) return 'entry.' + match[1];
+            }
+          }
+
+          return null;
+        }
+
         // Sweep DOM to extract current answers for all Google Forms question types
         function scanFormAnswers() {
           var state = {};
@@ -112,53 +142,28 @@ app.get("/proxy-form/:formId", async (req, res) => {
             // 1. Text Inputs & Textareas (Short Answer & Paragraph)
             var textInputs = document.querySelectorAll('input[type="text"], input[type="email"], textarea, input:not([type])');
             textInputs.forEach(function(el) {
-              var name = el.getAttribute('name');
-              var entryId = name || el.getAttribute('data-initial-value');
-              
-              if (!entryId && el.name) entryId = el.name;
-              
-              // Find entry ID from name="entry.XXXXXX"
-              if (name && name.indexOf('entry.') === 0) {
-                var val = el.value ? el.value.trim() : "";
-                if (val) state[name] = val;
+              var entryId = findEntryIdForElement(el);
+              var val = el.value ? el.value.trim() : "";
+              if (entryId && val) {
+                state[entryId] = val;
               }
             });
 
             // 2. Radio Buttons (Multiple Choice & Linear Scale)
-            var radios = document.querySelectorAll('div[role="radio"][aria-checked="true"], input[type="radio"]:checked');
-            radios.forEach(function(el) {
-              var entryId = el.getAttribute('name') || el.getAttribute('data-entry-id');
-              var val = el.getAttribute('data-value') || el.getAttribute('value') || el.getAttribute('aria-label');
-
-              if (!entryId) {
-                var parentContainer = el.closest('[data-params]');
-                if (parentContainer) {
-                  var paramsStr = parentContainer.getAttribute('data-params');
-                  var entryMatch = paramsStr ? paramsStr.match(/entry\.(\d+)/) : null;
-                  if (entryMatch) entryId = 'entry.' + entryMatch[1];
-                }
-              }
-
+            var checkedRadios = document.querySelectorAll('div[role="radio"][aria-checked="true"], input[type="radio"]:checked');
+            checkedRadios.forEach(function(el) {
+              var entryId = findEntryIdForElement(el);
+              var val = el.getAttribute('data-value') || el.getAttribute('value') || el.getAttribute('aria-label') || el.textContent;
               if (entryId && val) {
                 state[entryId] = val.trim();
               }
             });
 
             // 3. Checkboxes (Preserve Multiple Selections as Arrays)
-            var checkboxes = document.querySelectorAll('div[role="checkbox"][aria-checked="true"], input[type="checkbox"]:checked');
-            checkboxes.forEach(function(el) {
-              var entryId = el.getAttribute('name') || el.getAttribute('data-entry-id');
-              var val = el.getAttribute('data-answer-value') || el.getAttribute('data-value') || el.getAttribute('value') || el.getAttribute('aria-label');
-
-              if (!entryId) {
-                var parentContainer = el.closest('[data-params]');
-                if (parentContainer) {
-                  var paramsStr = parentContainer.getAttribute('data-params');
-                  var entryMatch = paramsStr ? paramsStr.match(/entry\.(\d+)/) : null;
-                  if (entryMatch) entryId = 'entry.' + entryMatch[1];
-                }
-              }
-
+            var checkedBoxes = document.querySelectorAll('div[role="checkbox"][aria-checked="true"], input[type="checkbox"]:checked');
+            checkedBoxes.forEach(function(el) {
+              var entryId = findEntryIdForElement(el);
+              var val = el.getAttribute('data-answer-value') || el.getAttribute('data-value') || el.getAttribute('value') || el.getAttribute('aria-label') || el.textContent;
               if (entryId && val) {
                 val = val.trim();
                 if (!state[entryId]) {
@@ -174,42 +179,34 @@ app.get("/proxy-form/:formId", async (req, res) => {
             });
 
             // 4. Dropdowns & Selects
-            var selects = document.querySelectorAll('select, div[role="listbox"]');
-            selects.forEach(function(el) {
-              var name = el.getAttribute('name');
-              var val = el.value || el.getAttribute('data-value');
-              if (name && name.indexOf('entry.') === 0 && val) {
-                state[name] = val.trim();
+            var dropdowns = document.querySelectorAll('select, div[role="listbox"]');
+            dropdowns.forEach(function(el) {
+              var entryId = findEntryIdForElement(el);
+              var val = el.value || el.getAttribute('data-value') || el.getAttribute('aria-label');
+              if (entryId && val) {
+                state[entryId] = val.trim();
               }
             });
 
-            // 5. Date & Time Inputs
-            var dateInputs = document.querySelectorAll('input[type="date"], input[type="time"]');
-            dateInputs.forEach(function(el) {
-              var name = el.getAttribute('name');
-              if (name && name.indexOf('entry.') === 0 && el.value) {
-                state[name] = el.value.trim();
-              }
-            });
-
-            // 6. Generic Sweep for all name="entry.XXXXXX" elements
+            // 5. Generic sweep for all filled elements with name="entry.XXXXXX"
             var allEntryInputs = document.querySelectorAll('[name^="entry."]');
             allEntryInputs.forEach(function(el) {
               var name = el.getAttribute('name');
               if (!name) return;
+              var cleanName = name.replace('_sentinel', '');
 
               var type = el.getAttribute('type');
-              if (type === 'radio' && !el.checked) return;
-              if (type === 'checkbox' && !el.checked) return;
-
-              var val = el.value;
-              if (val !== undefined && val !== null && val !== '') {
-                if (type === 'checkbox') {
-                  if (!state[name]) state[name] = [val];
-                  else if (Array.isArray(state[name]) && state[name].indexOf(val) === -1) state[name].push(val);
-                } else {
-                  state[name] = val;
+              if (type === 'radio' || type === 'checkbox') {
+                if (el.checked && el.value) {
+                  if (type === 'checkbox') {
+                    if (!state[cleanName]) state[cleanName] = [el.value];
+                    else if (Array.isArray(state[cleanName]) && state[cleanName].indexOf(el.value) === -1) state[cleanName].push(el.value);
+                  } else {
+                    state[cleanName] = el.value;
+                  }
                 }
+              } else if (el.value) {
+                state[cleanName] = el.value.trim();
               }
             });
           } catch(err) {
@@ -247,7 +244,7 @@ app.get("/proxy-form/:formId", async (req, res) => {
         }
 
         // Attach event listeners for continuous tracking
-        ['input', 'change', 'blur', 'click'].forEach(function(evtType) {
+        ['input', 'change', 'blur', 'click', 'keyup'].forEach(function(evtType) {
           document.addEventListener(evtType, function() {
             setTimeout(scanFormAnswers, 100);
           }, true);
@@ -272,10 +269,10 @@ app.get("/proxy-form/:formId", async (req, res) => {
           }
         });
 
-        // Periodic snapshot report every 3 seconds
+        // Periodic snapshot report every 2 seconds
         setInterval(function() {
           sendSnapshotToParent("SAFETEST_ANSWER_UPDATE");
-        }, 3000);
+        }, 2000);
 
         // Initial scan
         setTimeout(scanFormAnswers, 500);
